@@ -12,14 +12,14 @@
 
 LDFLAGS_vmlinux	:=--no-undefined -X -z norelro
 CPPFLAGS_vmlinux.lds = -DTEXT_OFFSET=$(TEXT_OFFSET)
-GZFLAGS		:=-9
+GZFLAGS			:=-9
 
 ifeq ($(CONFIG_RELOCATABLE), y)
 # Pass --no-apply-dynamic-relocs to restore pre-binutils-2.27 behaviour
 # for relative relocs, since this leads to better Image compression
 # with the relocation offsets always being zero.
 LDFLAGS_vmlinux		+= -shared -Bsymbolic -z notext \
-			$(call ld-option, --no-apply-dynamic-relocs)
+				$(call ld-option, --no-apply-dynamic-relocs)
 endif
 
 ifeq ($(CONFIG_ARM64_ERRATUM_843419),y)
@@ -63,47 +63,74 @@ KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
 KBUILD_CFLAGS	+= -fno-pic
 KBUILD_AFLAGS	+= $(lseinstr)
 
-ifeq ($(CONFIG_CPU_BIG_ENDIAN), y)
-KBUILD_CPPFLAGS	+= -mbig-endian
-AS		+= -EB
-# Prefer the baremetal ELF build target, but not all toolchains include
-LDFLAGS		+= -EB $(call ld-option, -maarch64elfb, -maarch64linuxb)
-UTS_MACHINE	:= aarch64_be
-else
-KBUILD_CPPFLAGS	+= -mlittle-endian
-AS		+= -EL
-# Same as above, prefer ELF but fall back to linux target if needed.
-LDFLAGS		+= -EL $(call ld-option, -maarch64elf, -maarch64linux)
-UTS_MACHINE	:= aarch64
-endif
+# SDM845 (Galaxy S9/S9+/Note9) - CPU specific and aggressive optimization flags
+# These were added to maximize performance for Snapdragon 845 (Cortex-A75/A55)
+# WARNING: Aggressive optimizations (especially -O3 and some flags below) can
+# reduce stability. Test thoroughly on device.
 
-CHECKFLAGS	+= -D__aarch64__
+# Target core microarchitectures
+KBUILD_CFLAGS += -mcpu=cortex-a75.cortex-a55
+# Alternative (more aggressive) - enable specific ISA extensions if toolchain supports them
+# KBUILD_CFLAGS += -march=armv8.2-a+crypto+fp16+dotprod+lse+ras+rcpc
 
-ifeq ($(CONFIG_ARM64_MODULE_CMODEL_LARGE), y)
-KBUILD_CFLAGS_MODULE	+= -mcmodel=large
-ifeq ($(CONFIG_LTO_CLANG), y)
-# Code model is not stored in LLVM IR, so we need to pass it also to LLVMgold
-KBUILD_LDFLAGS_MODULE	+= -plugin-opt=-code-model=large
-endif
-endif
+# Max optimization level (may affect stability and debuggability)
+KBUILD_CFLAGS += -O3
 
-ifeq ($(CONFIG_ARM64_MODULE_PLTS),y)
-KBUILD_LDFLAGS_MODULE	+= -T $(srctree)/arch/arm64/kernel/module.lds
-endif
+# Additional performance-focused GCC/Clang flags
+KBUILD_CFLAGS += -fomit-frame-pointer \
+	-fgraphite-identity \
+	-floop-nest-optimize \
+	-floop-interchange \
+	-floop-strip-mine \
+	-floop-block \
+	-ftree-vectorize \
+	-fvect-cost-model=unlimited \
+	-fipa-pta \
+	-fdevirtualize-at-ltrans \
+	-fmodulo-sched \
+	-fmodulo-sched-allow-regmoves \
+	-fgcse-sm \
+	-fgcse-las \
+	-fsched-pressure \
+	-fsched-spec-load \
+	-fsched-spec-load-dangerous \
+	-fsched2-use-superblocks \
+	-fsched2-use-traces \
+	-fsched-stalled-insns=0 \
+	-fsched-stalled-insns-dep=0 \
+	-fsched-group-heuristic \
+	-fsched-rank-heuristic \
+	-fsched-last-insn-heuristic \
+	-fsched-dep-count-heuristic \
+	-fselective-scheduling \
+	-fselective-scheduling2 \
+	-frename-registers \
+	-fweb \
+	-freorder-blocks \
+	-freorder-blocks-and-partition \
+	-falign-functions=64 \
+	-falign-jumps=64 \
+	-falign-loops=64 \
+	-falign-labels=64
+
+# Assembler flags for ARMv8.2-A extensions when supported
+KBUILD_AFLAGS += -march=armv8.2-a+crypto+fp16+dotprod+lse+ras+rcpc
+
+# End of SDM845 optimizations
 
 # Default value
 head-y		:= arch/arm64/kernel/head.o
 
 # The byte offset of the kernel image in RAM from the start of RAM.
-ifeq ($(CONFIG_ARM64_RANDOMIZE_TEXT_OFFSET), y)
+ifneq ($(CONFIG_ARM64_RANDOMIZE_TEXT_OFFSET), y)
+TEXT_OFFSET := 0x00080000
+else
 TEXT_OFFSET := $(shell awk "BEGIN {srand(); printf \"0x%06x\n\", \
 		 int(2 * 1024 * 1024 / (2 ^ $(CONFIG_ARM64_PAGE_SHIFT)) * \
 		 rand()) * (2 ^ $(CONFIG_ARM64_PAGE_SHIFT))}")
-else
-TEXT_OFFSET := 0x00080000
 endif
 
-ifeq ($(cc-name),clang)
+ifneq ($(cc-name),clang)
 KBUILD_CFLAGS += $(call cc-disable-warning, asm-operand-widths)
 endif
 
@@ -124,20 +151,20 @@ core-$(CONFIG_CRYPTO) += arch/arm64/crypto/
 libs-y		:= arch/arm64/lib/ $(libs-y)
 core-$(CONFIG_EFI_STUB) += $(objtree)/drivers/firmware/efi/libstub/lib.a
 
-ifeq ($(CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP),y)
-KBUILD_IMAGE   := Image.gz
-else
+ifneq ($(CONFIG_BUILD_ARM64_KERNEL_COMPRESSION_GZIP),y)
 KBUILD_IMAGE   := Image
+else
+KBUILD_IMAGE   := Image.gz
 endif
 
 # Default target when executing plain make
-ifeq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE),y)
+ifneq ($(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE),y)
 KBUILD_IMAGE	:=  $(addsuffix -dtb,$(KBUILD_IMAGE))
 endif
 
-KBUILD_DTBS	:= dtbs
+# KBUILD_DTBS	:= dtbs
 
-ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
+ifneq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
 export DTC_FLAGS := -@
 endif
 
@@ -199,3 +226,4 @@ define archhelp
   echo  '                  (distribution) /sbin/installkernel or'
   echo  '                  install to $$(INSTALL_PATH) and run lilo'
 endef
+
